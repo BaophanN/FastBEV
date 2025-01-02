@@ -12,8 +12,8 @@ from mmdet.models.backbones.resnet import ResNet
 
 
 @DETECTORS.register_module()
-class BEVDet(CenterPoint):
-    r"""BEVDet paradigm for multi-camera 3D object detection.
+class FastBEV(CenterPoint):
+    r"""FastBEV paradigm for multi-camera 3D object detection.
 
     Please refer to the `paper <https://arxiv.org/abs/2112.11790>`_
 
@@ -29,8 +29,9 @@ class BEVDet(CenterPoint):
                  img_bev_encoder_backbone=None,
                  img_bev_encoder_neck=None,
                  use_grid_mask=False,
+                 use_depth=False,
                  **kwargs):
-        super(BEVDet, self).__init__(**kwargs)
+        super(FastBEV, self).__init__(**kwargs)
         self.grid_mask = None if not use_grid_mask else \
             GridMask(True, True, rotate=1, offset=False, ratio=0.5, mode=1,
                      prob=0.7)
@@ -39,6 +40,7 @@ class BEVDet(CenterPoint):
             self.img_bev_encoder_backbone = \
                 builder.build_backbone(img_bev_encoder_backbone)
             self.img_bev_encoder_neck = builder.build_neck(img_bev_encoder_neck)
+        self.use_depth = use_depth
 
     def image_encoder(self, img, stereo=False):
         imgs = img
@@ -91,7 +93,7 @@ class BEVDet(CenterPoint):
         """Extract features of images."""
         img = self.prepare_inputs(img)
         x, _ = self.image_encoder(img[0])
-        x, depth = self.img_view_transformer([x] + img[1:7])
+        x, depth = self.img_view_transformer([x] + img[1:8])
         x = self.bev_encoder(x)
         return [x], depth
 
@@ -137,9 +139,14 @@ class BEVDet(CenterPoint):
         Returns:
             dict: Losses of different branches.
         """
-        img_feats, pts_feats, _ = self.extract_feat(
+        img_feats, pts_feats, depth = self.extract_feat(
             points, img=img_inputs, img_metas=img_metas, **kwargs)
-        losses = dict()
+        if self.use_depth:
+            gt_depth = kwargs['gt_depth']
+            loss_depth = self.img_view_transformer.get_depth_loss(gt_depth, depth)
+            losses = dict(loss_depth=loss_depth)
+        else:
+            losses = dict()
         losses_pts = self.forward_pts_train(img_feats, gt_bboxes_3d,
                                             gt_labels_3d, img_metas,
                                             gt_bboxes_ignore)
@@ -215,61 +222,10 @@ class BEVDet(CenterPoint):
         return outs
 
 
-@DETECTORS.register_module()
-class BEVDetTRT(BEVDet):
-
-    def result_serialize(self, outs):
-        outs_ = []
-        for out in outs:
-            for key in ['reg', 'height', 'dim', 'rot', 'vel', 'heatmap']:
-                outs_.append(out[0][key])
-        return outs_
-
-    def result_deserialize(self, outs):
-        outs_ = []
-        keys = ['reg', 'height', 'dim', 'rot', 'vel', 'heatmap']
-        for head_id in range(len(outs) // 6):
-            outs_head = [dict()]
-            for kid, key in enumerate(keys):
-                outs_head[0][key] = outs[head_id * 6 + kid]
-            outs_.append(outs_head)
-        return outs_
-
-    def forward(
-        self,
-        img,
-        ranks_depth,
-        ranks_feat,
-        ranks_bev,
-        interval_starts,
-        interval_lengths,
-    ):
-        x = self.img_backbone(img)
-        x = self.img_neck(x)
-        x = self.img_view_transformer.depth_net(x)
-        depth = x[:, :self.img_view_transformer.D].softmax(dim=1)
-        tran_feat = x[:, self.img_view_transformer.D:(
-            self.img_view_transformer.D +
-            self.img_view_transformer.out_channels)]
-        tran_feat = tran_feat.permute(0, 2, 3, 1)
-        x = TRTBEVPoolv2.apply(depth.contiguous(), tran_feat.contiguous(),
-                               ranks_depth, ranks_feat, ranks_bev,
-                               interval_starts, interval_lengths)
-        x = x.permute(0, 3, 1, 2).contiguous()
-        bev_feat = self.bev_encoder(x)
-        outs = self.pts_bbox_head([bev_feat])
-        outs = self.result_serialize(outs)
-        return outs
-
-    def get_bev_pool_input(self, input):
-        input = self.prepare_inputs(input)
-        coor = self.img_view_transformer.get_lidar_coor(*input[1:7])
-        return self.img_view_transformer.voxel_pooling_prepare_v2(coor)
-
 
 @DETECTORS.register_module()
-class BEVDet4D(BEVDet):
-    r"""BEVDet4D paradigm for multi-camera 3D object detection.
+class FastBEV4D(FastBEV):
+    r"""FastBEV4D paradigm for multi-camera 3D object detection.
 
     Please refer to the `paper <https://arxiv.org/abs/2203.17054>`_
 
@@ -287,8 +243,9 @@ class BEVDet4D(BEVDet):
                  align_after_view_transfromation=False,
                  num_adj=1,
                  with_prev=True,
+                 pre_grad=False,
                  **kwargs):
-        super(BEVDet4D, self).__init__(**kwargs)
+        super(FastBEV4D, self).__init__(**kwargs)
         self.pre_process = pre_process is not None
         if self.pre_process:
             self.pre_process_net = builder.build_backbone(pre_process)
@@ -296,6 +253,7 @@ class BEVDet4D(BEVDet):
         self.num_frame = num_adj + 1
 
         self.with_prev = with_prev
+        self.pre_grad = pre_grad
         self.grid = None
 
     def gen_grid(self, input, sensor2keyegos, bda, bda_adj=None):
@@ -451,7 +409,7 @@ class BEVDet4D(BEVDet):
             ego2globals,
             intrins.view(B, self.num_frame, N, 3, 3),
             post_rots.view(B, self.num_frame, N, 3, 3),
-            post_trans.view(B, self.num_frame, N, 3)
+            post_trans.view(B, self.num_frame, N, 3),
         ]
         extra = [torch.split(t, 1, 1) for t in extra]
         extra = [[p.squeeze(1) for p in t] for t in extra]
@@ -485,8 +443,12 @@ class BEVDet4D(BEVDet):
                 if key_frame:
                     bev_feat, depth = self.prepare_bev_feat(*inputs_curr)
                 else:
-                    with torch.no_grad():
+                    # TODO: bug here, need fixing
+                    if self.pre_grad:
                         bev_feat, depth = self.prepare_bev_feat(*inputs_curr)
+                    else:
+                        with torch.no_grad():
+                            bev_feat, depth = self.prepare_bev_feat(*inputs_curr)
             else:
                 bev_feat = torch.zeros_like(bev_feat_list[0])
                 depth = None
@@ -523,185 +485,75 @@ class BEVDet4D(BEVDet):
 
 
 @DETECTORS.register_module()
-class BEVDepth4D(BEVDet4D):
+class FastBEVTRT(FastBEV):
 
-    def forward_train(self,
-                      points=None,
-                      img_metas=None,
-                      gt_bboxes_3d=None,
-                      gt_labels_3d=None,
-                      gt_labels=None,
-                      gt_bboxes=None,
-                      img_inputs=None,
-                      proposals=None,
-                      gt_bboxes_ignore=None,
-                      **kwargs):
-        """Forward training function.
+    def result_serialize(self, outs):
+        outs_ = []
+        for out in outs:
+            for key in ['reg', 'height', 'dim', 'rot', 'vel', 'heatmap']:
+                outs_.append(out[0][key])
+        return outs_
 
-        Args:
-            points (list[torch.Tensor], optional): Points of each sample.
-                Defaults to None.
-            img_metas (list[dict], optional): Meta information of each sample.
-                Defaults to None.
-            gt_bboxes_3d (list[:obj:`BaseInstance3DBoxes`], optional):
-                Ground truth 3D boxes. Defaults to None.
-            gt_labels_3d (list[torch.Tensor], optional): Ground truth labels
-                of 3D boxes. Defaults to None.
-            gt_labels (list[torch.Tensor], optional): Ground truth labels
-                of 2D boxes in images. Defaults to None.
-            gt_bboxes (list[torch.Tensor], optional): Ground truth 2D boxes in
-                images. Defaults to None.
-            img (torch.Tensor optional): Images of each sample with shape
-                (N, C, H, W). Defaults to None.
-            proposals ([list[torch.Tensor], optional): Predicted proposals
-                used for training Fast RCNN. Defaults to None.
-            gt_bboxes_ignore (list[torch.Tensor], optional): Ground truth
-                2D boxes in images to be ignored. Defaults to None.
+    def result_deserialize(self, outs):
+        outs_ = []
+        keys = ['reg', 'height', 'dim', 'rot', 'vel', 'heatmap']
+        for head_id in range(len(outs) // 6):
+            outs_head = [dict()]
+            for kid, key in enumerate(keys):
+                outs_head[0][key] = outs[head_id * 6 + kid]
+            outs_.append(outs_head)
+        return outs_
 
-        Returns:
-            dict: Losses of different branches.
-        """
-        img_feats, pts_feats, depth = self.extract_feat(
-            points, img=img_inputs, img_metas=img_metas, **kwargs)
-        gt_depth = kwargs['gt_depth']
-        loss_depth = self.img_view_transformer.get_depth_loss(gt_depth, depth)
-        losses = dict(loss_depth=loss_depth)
-        losses_pts = self.forward_pts_train(img_feats, gt_bboxes_3d,
-                                            gt_labels_3d, img_metas,
-                                            gt_bboxes_ignore)
-        losses.update(losses_pts)
-        return losses
+    def forward(
+        self,
+        img,
+        coors_img,
+        coors_depth=None
+    ):
+        img = self.img_backbone(img)
+        img = self.img_neck(img)
+        img = self.img_view_transformer.depth_net(img)
 
+        channel = img.shape[1]
+        img = img.permute(0, 2, 3, 1).reshape(-1, channel)
+        img_0 = torch.zeros([1, img.shape[1]]).to(img.device)
+        img_rest = img[1:]
+        img = torch.cat([img_0, img_rest])
 
-@DETECTORS.register_module()
-class BEVStereo4D(BEVDepth4D):
-    def __init__(self, **kwargs):
-        super(BEVStereo4D, self).__init__(**kwargs)
-        self.extra_ref_frames = 1
-        self.temporal_frame = self.num_frame
-        self.num_frame += self.extra_ref_frames
-
-    def extract_stereo_ref_feat(self, x):
-        B, N, C, imH, imW = x.shape
-        x = x.view(B * N, C, imH, imW)
-        if isinstance(self.img_backbone,ResNet):
-            if self.img_backbone.deep_stem:
-                x = self.img_backbone.stem(x)
-            else:
-                x = self.img_backbone.conv1(x)
-                x = self.img_backbone.norm1(x)
-                x = self.img_backbone.relu(x)
-            x = self.img_backbone.maxpool(x)
-            for i, layer_name in enumerate(self.img_backbone.res_layers):
-                res_layer = getattr(self.img_backbone, layer_name)
-                x = res_layer(x)
-                return x
+        if channel != self.img_view_transformer.out_channels:
+            depth = img[:, :self.img_view_transformer.D].reshape(-1)
+            x = img[:, self.img_view_transformer.D:(self.img_view_transformer.D + self.img_view_transformer.out_channels)]
+            x = x[coors_img]
+            depth = depth[coors_depth].unsqueeze(1)
+            x = x * depth
         else:
-            x = self.img_backbone.patch_embed(x)
-            hw_shape = (self.img_backbone.patch_embed.DH,
-                        self.img_backbone.patch_embed.DW)
-            if self.img_backbone.use_abs_pos_embed:
-                x = x + self.img_backbone.absolute_pos_embed
-            x = self.img_backbone.drop_after_pos(x)
+            x = img[coors_img]
+        x = x.view(1, *self.img_view_transformer.grid_size.int().tolist(), self.img_view_transformer.out_channels)
+        N, X, Y, Z, C = x.shape
 
-            for i, stage in enumerate(self.img_backbone.stages):
-                x, hw_shape, out, out_hw_shape = stage(x, hw_shape)
-                out = out.view(-1,  *out_hw_shape,
-                               self.img_backbone.num_features[i])
-                out = out.permute(0, 3, 1, 2).contiguous()
-                return out
-
-    def prepare_bev_feat(self, img, sensor2keyego, ego2global, intrin,
-                         post_rot, post_tran, bda, mlp_input, feat_prev_iv,
-                         k2s_sensor, extra_ref_frame):
-        if extra_ref_frame:
-            stereo_feat = self.extract_stereo_ref_feat(img)
-            return None, None, stereo_feat
-        x, stereo_feat = self.image_encoder(img, stereo=True)
-        metas = dict(k2s_sensor=k2s_sensor,
-                     intrins=intrin,
-                     post_rots=post_rot,
-                     post_trans=post_tran,
-                     frustum=self.img_view_transformer.cv_frustum.to(x),
-                     cv_downsample=4,
-                     downsample=self.img_view_transformer.downsample,
-                     grid_config=self.img_view_transformer.grid_config,
-                     cv_feat_list=[feat_prev_iv, stereo_feat])
-        bev_feat, depth = self.img_view_transformer(
-            [x, sensor2keyego, ego2global, intrin, post_rot, post_tran, bda,
-             mlp_input], metas)
-        if self.pre_process:
-            bev_feat = self.pre_process_net(bev_feat)[0]
-        return bev_feat, depth, stereo_feat
-
-    def extract_img_feat(self,
-                         img,
-                         img_metas,
-                         pred_prev=False,
-                         sequential=False,
-                         **kwargs):
-        if sequential:
-            # Todo
-            assert False
-        imgs, sensor2keyegos, ego2globals, intrins, post_rots, post_trans, \
-        bda, curr2adjsensor = self.prepare_inputs(img, stereo=True)
-        """Extract features of images."""
-        bev_feat_list = []
-        depth_key_frame = None
-        feat_prev_iv = None
-        for fid in range(self.num_frame-1, -1, -1):
-            img, sensor2keyego, ego2global, intrin, post_rot, post_tran = \
-                imgs[fid], sensor2keyegos[fid], ego2globals[fid], intrins[fid], \
-                post_rots[fid], post_trans[fid]
-            key_frame = fid == 0
-            extra_ref_frame = fid == self.num_frame-self.extra_ref_frames
-            if key_frame or self.with_prev:
-                if self.align_after_view_transfromation:
-                    sensor2keyego, ego2global = sensor2keyegos[0], ego2globals[0]
-                mlp_input = self.img_view_transformer.get_mlp_input(
-                    sensor2keyegos[0], ego2globals[0], intrin,
-                    post_rot, post_tran, bda)
-                inputs_curr = (img, sensor2keyego, ego2global, intrin,
-                               post_rot, post_tran, bda, mlp_input,
-                               feat_prev_iv, curr2adjsensor[fid],
-                               extra_ref_frame)
-                if key_frame:
-                    bev_feat, depth, feat_curr_iv = \
-                        self.prepare_bev_feat(*inputs_curr)
-                    depth_key_frame = depth
-                else:
-                    with torch.no_grad():
-                        bev_feat, depth, feat_curr_iv = \
-                            self.prepare_bev_feat(*inputs_curr)
-                if not extra_ref_frame:
-                    bev_feat_list.append(bev_feat)
-                feat_prev_iv = feat_curr_iv
-        if pred_prev:
-            # Todo
-            assert False
-        if not self.with_prev:
-            bev_feat_key = bev_feat_list[0]
-            if len(bev_feat_key.shape) ==4:
-                b,c,h,w = bev_feat_key.shape
-                bev_feat_list = \
-                    [torch.zeros([b,
-                                  c * (self.num_frame -
-                                       self.extra_ref_frames - 1),
-                                  h, w]).to(bev_feat_key), bev_feat_key]
+        if self.img_view_transformer.is_transpose:
+            permute = [0, 3, 2, 1]
+        else:
+            permute = [0, 3, 1, 2]
+        if self.img_view_transformer.fuse_type is not None:
+            if self.img_view_transformer.fuse_type == 's2c':
+                x = x.reshape(N, X, Y, Z*C).permute(permute)
+                x = self.img_view_transformer.fuse(x)
+            elif self.img_view_transformer.fuse_type == 'sum':
+                x = x.sum(dim=-2).permute(permute)
+            elif self.img_view_transformer.fuse_type == 'max':
+                x = x.max(dim=-2)[0].permute(permute)
             else:
-                b, c, z, h, w = bev_feat_key.shape
-                bev_feat_list = \
-                    [torch.zeros([b,
-                                  c * (self.num_frame -
-                                       self.extra_ref_frames - 1), z,
-                                  h, w]).to(bev_feat_key), bev_feat_key]
-        if self.align_after_view_transfromation:
-            for adj_id in range(self.num_frame-2):
-                bev_feat_list[adj_id] = \
-                    self.shift_feature(bev_feat_list[adj_id],
-                                       [sensor2keyegos[0],
-                                        sensor2keyegos[self.num_frame-2-adj_id]],
-                                       bda)
-        bev_feat = torch.cat(bev_feat_list, dim=1)
-        x = self.bev_encoder(bev_feat)
-        return [x], depth_key_frame
+                raise NotImplemented
+            x = self.img_view_transformer.downsample(x)
+
+        bev_feat = self.bev_encoder(x)
+        outs = self.pts_bbox_head([bev_feat])
+        outs = self.result_serialize(outs)
+        return outs
+
+    def get_bev_pool_input(self, input):
+        input = self.prepare_inputs(input)
+        coor = self.img_view_transformer.get_lidar_coor(*input[1:7])
+        return self.img_view_transformer.voxel_pooling_prepare_v2(coor)
+
