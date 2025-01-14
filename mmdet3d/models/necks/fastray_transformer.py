@@ -271,7 +271,8 @@ class FastrayTransformer(BaseModule):
         x = input[0]
         B, N, C, H, W = x.shape
         x = x.view(B * N, C, H, W)
-        x = self.depth_net(x)
+        # Go through a simple Conv2D layer 
+        x = self.depth_net(x) 
         x = x.view(B, N, self.D + self.out_channels, H, W).permute(0, 1, 3, 4, 2)
         # warning: make sure not been sampled
         x[:, 0, 0, 0] = 0.0
@@ -281,6 +282,7 @@ class FastrayTransformer(BaseModule):
             depth = x[..., :self.D].softmax(dim=-1)
         x = x[..., self.D:(self.D + self.out_channels)]
         pre_voxel_coors_list, pre_img_coors_list, pre_depth_coors_list = self.get_fastray_input(input)
+        # What's the matter here? 
         if self.accelerate:
             assert self.use_depth, self.use_depth
             x = x.reshape(-1, self.out_channels)
