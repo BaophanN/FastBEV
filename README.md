@@ -6,6 +6,13 @@
 
 ## Inference latency
 ![](./resources/fastbev++_latency.jpg)
+
+### Training the model 
+```shell
+
+./tools/dist_train 1 configs/fastbev/paper/fastbev-r50-cbgs.py 
+```
+
 #### Estimate the inference speed of BEVDet
 ```shell
 # with acceleration
