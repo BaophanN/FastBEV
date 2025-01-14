@@ -1,4 +1,7 @@
 # FastBEV++
+Currently, playing with mini-nuscenes since the full dataset is too heavy. 
+The codebase is similar to that of LaneSegNet. Needs to install spconv-cu111. 
+
 
 ## Main Results
 
@@ -36,6 +39,9 @@ python tools/test.py $config $checkpoint --show --show-dir $save-path
 python tools/test.py $config $checkpoint --format-only --eval-options jsonfile_prefix=$savepath
 python tools/analysis_tools/vis.py $savepath/pts_bbox/results_nusc.json
 ```
+
+
+
 ## Acknowledgement
 
 This project is not possible without multiple great open-sourced code bases. We list some notable examples below.
