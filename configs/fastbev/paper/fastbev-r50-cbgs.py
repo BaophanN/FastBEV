@@ -67,7 +67,7 @@ model = dict(
     type='FastBEV',
     use_depth=False,
     img_backbone=dict(
-        pretrained='data/ckpts/resnet50-19c8e357.pth',
+        init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50'),
         type='ResNet',
         depth=50,
         num_stages=4,
@@ -243,16 +243,16 @@ share_data_config = dict(
 
 test_data_config = dict(
     pipeline=test_pipeline,
-    ann_file=data_root + 'bevdetv3-nuscenes_infos_val.pkl')
+    ann_file=data_root + 'bevdetv3-nuscenes_mini_infos_val.pkl')
 
 data = dict(
-    samples_per_gpu=8,
+    samples_per_gpu=2,
     workers_per_gpu=4,
     train=dict(
         type='CBGSDataset',
         dataset=dict(
         data_root=data_root,
-        ann_file=data_root + 'bevdetv3-nuscenes_infos_train.pkl',
+        ann_file=data_root + 'bevdetv3-nuscenes_mini_infos_train.pkl',
         pipeline=train_pipeline,
         classes=class_names,
         test_mode=False,
@@ -276,7 +276,7 @@ lr_config = dict(
     warmup_iters=200,
     warmup_ratio=0.001,
     step=[20,])
-runner = dict(type='EpochBasedRunner', max_epochs=20)
+runner = dict(type='EpochBasedRunner', max_epochs=1)
 
 custom_hooks = [
     dict(
@@ -287,4 +287,4 @@ custom_hooks = [
 ]
 
 # fp16 = dict(loss_scale='dynamic')
-resume_from = 'work_dirs/fastbev-r50-cbgs/latest.pth'
+# resume_from = 'work_dirs/fastbev-r50-cbgs/latest.pth'

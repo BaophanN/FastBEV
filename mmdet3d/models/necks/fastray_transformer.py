@@ -142,7 +142,7 @@ class FastrayTransformer(BaseModule):
 
             # get 2d coords
             dist = cur_coords[:, 2, :]
-            cur_coords[:, 2, :][cur_coords[:, 2, :] <= 0.0] = torch.inf
+            cur_coords[:, 2, :][cur_coords[:, 2, :] <= 0.0] = float('inf')
             cur_coords[:, :2, :] /= cur_coords[:, 2:3, :]
 
             # imgaug
@@ -233,7 +233,7 @@ class FastrayTransformer(BaseModule):
         gt_depths = gt_depths.permute(0, 1, 3, 5, 2, 4).contiguous()
         gt_depths = gt_depths.view(-1, self.stride * self.stride)
         gt_depths_tmp = torch.where(gt_depths == 0.0,
-                                    torch.inf * torch.ones_like(gt_depths),
+                                    float('inf') * torch.ones_like(gt_depths),
                                     gt_depths)
         gt_depths = torch.min(gt_depths_tmp, dim=-1).values
         gt_depths = gt_depths.view(B * N, H // self.stride,
