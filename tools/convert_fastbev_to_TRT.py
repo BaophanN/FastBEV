@@ -4,7 +4,7 @@ import torch.onnx
 from onnxsim import simplify
 
 from mmcv import Config
-# from mmdeploy.backend.tensorrt.utils import save, search_cuda_version
+from mmdeploy.backend.tensorrt.utils import save, search_cuda_version
 
 try:
     # If mmdet version > 2.23.0, compat_cfg would be imported and
@@ -20,15 +20,15 @@ import h5py
 import mmcv
 import numpy as np
 import onnx
-# import pycuda.driver as cuda
-# import tensorrt as trt
+import pycuda.driver as cuda
+import tensorrt as trt
 import torch
 import tqdm
 from mmcv.runner import load_checkpoint
-# from mmdeploy.apis.core import no_mp
-# from mmdeploy.backend.tensorrt.calib_utils import HDF5Calibrator
-# from mmdeploy.backend.tensorrt.init_plugins import load_tensorrt_plugin
-# from mmdeploy.utils import load_config
+from mmdeploy.apis.core import no_mp
+from mmdeploy.backend.tensorrt.calib_utils import HDF5Calibrator
+from mmdeploy.backend.tensorrt.init_plugins import load_tensorrt_plugin
+from mmdeploy.utils import load_config
 from packaging import version
 from torch.utils.data import DataLoader
 
@@ -38,47 +38,47 @@ from mmdet.datasets import replace_ImageToTensor
 from tools.misc.fuse_conv_bn import fuse_module
 
 
-# class HDF5CalibratorBEVDet(HDF5Calibrator):
+class HDF5CalibratorBEVDet(HDF5Calibrator):
 
-#     def get_batch(self, names: Sequence[str], **kwargs) -> list:
-#         """Get batch data."""
-#         if self.count < self.dataset_length:
-#             if self.count % 100 == 0:
-#                 print('%d/%d' % (self.count, self.dataset_length))
-#             ret = []
-#             for name in names:
-#                 input_group = self.calib_data[name]
-#                 if name == 'img':
-#                     data_np = input_group[str(self.count)][...].astype(
-#                         np.float32)
-#                 else:
-#                     data_np = input_group[str(self.count)][...].astype(
-#                         np.int32)
+    def get_batch(self, names: Sequence[str], **kwargs) -> list:
+        """Get batch data."""
+        if self.count < self.dataset_length:
+            if self.count % 100 == 0:
+                print('%d/%d' % (self.count, self.dataset_length))
+            ret = []
+            for name in names:
+                input_group = self.calib_data[name]
+                if name == 'img':
+                    data_np = input_group[str(self.count)][...].astype(
+                        np.float32)
+                else:
+                    data_np = input_group[str(self.count)][...].astype(
+                        np.int32)
 
-#                 # tile the tensor so we can keep the same distribute
-#                 opt_shape = self.input_shapes[name]['opt_shape']
-#                 data_shape = data_np.shape
+                # tile the tensor so we can keep the same distribute
+                opt_shape = self.input_shapes[name]['opt_shape']
+                data_shape = data_np.shape
 
-#                 reps = [
-#                     int(np.ceil(opt_s / data_s))
-#                     for opt_s, data_s in zip(opt_shape, data_shape)
-#                 ]
+                reps = [
+                    int(np.ceil(opt_s / data_s))
+                    for opt_s, data_s in zip(opt_shape, data_shape)
+                ]
 
-#                 data_np = np.tile(data_np, reps)
+                data_np = np.tile(data_np, reps)
 
-#                 slice_list = tuple(slice(0, end) for end in opt_shape)
-#                 data_np = data_np[slice_list]
+                slice_list = tuple(slice(0, end) for end in opt_shape)
+                data_np = data_np[slice_list]
 
-#                 data_np_cuda_ptr = cuda.mem_alloc(data_np.nbytes)
-#                 cuda.memcpy_htod(data_np_cuda_ptr,
-#                                  np.ascontiguousarray(data_np))
-#                 self.buffers[name] = data_np_cuda_ptr
+                data_np_cuda_ptr = cuda.mem_alloc(data_np.nbytes)
+                cuda.memcpy_htod(data_np_cuda_ptr,
+                                 np.ascontiguousarray(data_np))
+                self.buffers[name] = data_np_cuda_ptr
 
-#                 ret.append(self.buffers[name])
-#             self.count += 1
-#             return ret
-#         else:
-#             return None
+                ret.append(self.buffers[name])
+            self.count += 1
+            return ret
+        else:
+            return None
 
 
 def parse_args():
@@ -110,18 +110,18 @@ def create_calib_input_data_impl(calib_file: str,
                                  model_partition: bool = False,
                                  metas: list = []) -> None:
     with h5py.File(calib_file, mode='w') as file:
-        calib_data_group = file.create_group('calib_data')
+        calib_data_group = file.require_group('calib_data')
         assert not model_partition
         # create end2end group
-        input_data_group = calib_data_group.create_group('end2end')
-        input_group_img = input_data_group.create_group('img')
+        input_data_group = calib_data_group.require_group('end2end')
+        # print('input_data_group', input_data_group);exit()
+        input_group_img = input_data_group.require_group('img')
         input_keys = [
-            'ranks_bev', 'ranks_depth', 'ranks_feat', 'interval_starts',
-            'interval_lengths'
+            'coors_img', 'coors_depth'
         ]
         input_groups = []
         for input_key in input_keys:
-            input_groups.append(input_data_group.create_group(input_key))
+            input_groups.append(input_data_group.require_group(input_key))
         metas = [
             metas[i].int().detach().cpu().numpy() for i in range(len(metas))
         ]
@@ -129,17 +129,19 @@ def create_calib_input_data_impl(calib_file: str,
             # save end2end data
             input_tensor = input_data['img_inputs'][0][0]
             input_ndarray = input_tensor.squeeze(0).detach().cpu().numpy()
-            # print(input_ndarray.shape, input_ndarray.dtype)
-            input_group_img.create_dataset(
+            # print(input_ndarray.shape, input_ndarray.dtype);exit()
+            input_group_img.require_dataset(
                 str(data_id),
                 shape=input_ndarray.shape,
+                dtype=input_ndarray.dtype,  # Add dtype here
                 compression='gzip',
                 compression_opts=4,
                 data=input_ndarray)
             for kid, input_key in enumerate(input_keys):
-                input_groups[kid].create_dataset(
+                input_groups[kid].require_dataset(
                     str(data_id),
                     shape=metas[kid].shape,
+                    dtype=input_ndarray.dtype,  # Add dtype here
                     compression='gzip',
                     compression_opts=4,
                     data=metas[kid])
@@ -195,101 +197,104 @@ def create_calib_input_data(calib_file: str,
             calib_file, dataloader, model_partition=False, metas=metas)
 
 
-# def from_onnx(onnx_model: Union[str, onnx.ModelProto],
-#               output_file_prefix: str,
-#               input_shapes: Dict[str, Sequence[int]],
-#               max_workspace_size: int = 0,
-#               fp16_mode: bool = False,
-#               int8_mode: bool = False,
-#               int8_param: Optional[dict] = None,
-#               device_id: int = 0,
-#               log_level: trt.Logger.Severity = trt.Logger.ERROR,
-#               **kwargs) -> trt.ICudaEngine:
-#     """Create a tensorrt engine from ONNX.
+def from_onnx(onnx_model: Union[str, onnx.ModelProto],
+              output_file_prefix: str,
+              input_shapes: Dict[str, Sequence[int]],
+              max_workspace_size: int = 0,
+              fp16_mode: bool = False,
+              int8_mode: bool = False,
+              int8_param: Optional[dict] = None,
+              device_id: int = 0,
+              log_level: trt.Logger.Severity = trt.Logger.ERROR,
+              **kwargs) -> trt.ICudaEngine:
+    """Create a tensorrt engine from ONNX.
 
-#     Modified from mmdeploy.backend.tensorrt.utils.from_onnx
-#     """
+    Modified from mmdeploy.backend.tensorrt.utils.from_onnx
+    """
 
-#     import os
-#     old_cuda_device = os.environ.get('CUDA_DEVICE', None)
-#     os.environ['CUDA_DEVICE'] = str(device_id)
-#     import pycuda.autoinit  # noqa:F401
-#     if old_cuda_device is not None:
-#         os.environ['CUDA_DEVICE'] = old_cuda_device
-#     else:
-#         os.environ.pop('CUDA_DEVICE')
+    import os
+    old_cuda_device = os.environ.get('CUDA_DEVICE', None)
+    os.environ['CUDA_DEVICE'] = str(device_id)
+    import pycuda.autoinit  # noqa:F401
+    if old_cuda_device is not None:
+        os.environ['CUDA_DEVICE'] = old_cuda_device
+    else:
+        os.environ.pop('CUDA_DEVICE')
 
-#     load_tensorrt_plugin()
-#     # create builder and network
-#     logger = trt.Logger(log_level)
-#     builder = trt.Builder(logger)
-#     EXPLICIT_BATCH = 1 << (int)(
-#         trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
-#     network = builder.create_network(EXPLICIT_BATCH)
+    load_tensorrt_plugin()
+    # create builder and network
+    logger = trt.Logger(log_level)
+    builder = trt.Builder(logger)
+    EXPLICIT_BATCH = 1 << (int)(
+        trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+    network = builder.create_network(EXPLICIT_BATCH)
 
-#     # parse onnx
-#     parser = trt.OnnxParser(network, logger)
+    # parse onnx
+    parser = trt.OnnxParser(network, logger)
 
-#     if isinstance(onnx_model, str):
-#         onnx_model = onnx.load(onnx_model)
+    if isinstance(onnx_model, str):
+        onnx_model = onnx.load(onnx_model)
 
-#     if not parser.parse(onnx_model.SerializeToString()):
-#         error_msgs = ''
-#         for error in range(parser.num_errors):
-#             error_msgs += f'{parser.get_error(error)}\n'
-#         raise RuntimeError(f'Failed to parse onnx, {error_msgs}')
+    if not parser.parse(onnx_model.SerializeToString()):
+        error_msgs = ''
+        for error in range(parser.num_errors):
+            error_msgs += f'{parser.get_error(error)}\n'
+        raise RuntimeError(f'Failed to parse onnx, {error_msgs}')
 
-#     # config builder
-#     if version.parse(trt.__version__) < version.parse('8'):
-#         builder.max_workspace_size = max_workspace_size
+    # config builder
+    if version.parse(trt.__version__) < version.parse('8'):
+        builder.max_workspace_size = max_workspace_size
 
-#     config = builder.create_builder_config()
-#     config.max_workspace_size = max_workspace_size
+    config = builder.create_builder_config()
+    config.max_workspace_size = max_workspace_size
 
-#     cuda_version = search_cuda_version()
-#     if cuda_version is not None:
-#         version_major = int(cuda_version.split('.')[0])
-#         if version_major < 11:
-#             # cu11 support cublasLt, so cudnn heuristic tactic should disable CUBLAS_LT # noqa E501
-#             tactic_source = config.get_tactic_sources() - (
-#                 1 << int(trt.TacticSource.CUBLAS_LT))
-#             config.set_tactic_sources(tactic_source)
+    cuda_version = search_cuda_version()
+    if cuda_version is not None:
+        version_major = int(cuda_version.split('.')[0])
+        if version_major < 11:
+            # cu11 support cublasLt, so cudnn heuristic tactic should disable CUBLAS_LT # noqa E501
+            tactic_source = config.get_tactic_sources() - (
+                1 << int(trt.TacticSource.CUBLAS_LT))
+            config.set_tactic_sources(tactic_source)
 
-#     profile = builder.create_optimization_profile()
+    profile = builder.create_optimization_profile()
 
-#     for input_name, param in input_shapes.items():
-#         min_shape = param['min_shape']
-#         opt_shape = param['opt_shape']
-#         max_shape = param['max_shape']
-#         profile.set_shape(input_name, min_shape, opt_shape, max_shape)
-#     config.add_optimization_profile(profile)
+    for input_name, param in input_shapes.items():
+        print('->param keys',param.keys(), param['min_shape'])
+        min_shape = param['min_shape']
+        opt_shape = param['opt_shape']
+        max_shape = param['max_shape']
+        profile.set_shape(input_name, min_shape, opt_shape, max_shape)
+    config.add_optimization_profile(profile)
+        # exit()
 
-#     if fp16_mode:
-#         if version.parse(trt.__version__) < version.parse('8'):
-#             builder.fp16_mode = fp16_mode
-#         config.set_flag(trt.BuilderFlag.FP16)
+    if fp16_mode:
+        if version.parse(trt.__version__) < version.parse('8'):
+            builder.fp16_mode = fp16_mode
+        config.set_flag(trt.BuilderFlag.FP16)
 
-#     if int8_mode:
-#         config.set_flag(trt.BuilderFlag.INT8)
-#         assert int8_param is not None
-#         config.int8_calibrator = HDF5CalibratorBEVDet(
-#             int8_param['calib_file'],
-#             input_shapes,
-#             model_type=int8_param['model_type'],
-#             device_id=device_id,
-#             algorithm=int8_param.get(
-#                 'algorithm', trt.CalibrationAlgoType.ENTROPY_CALIBRATION_2))
-#         if version.parse(trt.__version__) < version.parse('8'):
-#             builder.int8_mode = int8_mode
-#             builder.int8_calibrator = config.int8_calibrator
+    if int8_mode:
+        config.set_flag(trt.BuilderFlag.INT8)
+        assert int8_param is not None
+        config.int8_calibrator = HDF5CalibratorBEVDet(
+            int8_param['calib_file'],
+            input_shapes,
+            model_type=int8_param['model_type'],
+            device_id=device_id,
+            algorithm=int8_param.get(
+                'algorithm', trt.CalibrationAlgoType.ENTROPY_CALIBRATION_2))
+        if version.parse(trt.__version__) < version.parse('8'):
+            builder.int8_mode = int8_mode
+            builder.int8_calibrator = config.int8_calibrator
 
-#     # create engine
-#     engine = builder.build_engine(network, config)
+    # create engine
+    engine = builder.build_engine(network, config)
+    # engine = builder.build_serialized_network(network, config)
 
-#     assert engine is not None, 'Failed to create TensorRT engine'
+    assert engine is not None, 'Failed to create TensorRT engine'
 
-#     save(engine, output_file_prefix + '.engine')
-#     return engine
+    save(engine, output_file_prefix + '.engine')
+    return engine
 
 
 def main():
@@ -297,11 +302,11 @@ def main():
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
 
-    # load_tensorrt_plugin()
-    # assert 'bev_pool_v2' in get_plugin_names(), \
-    #     'bev_pool_v2 is not in the plugin list of tensorrt, ' \
-    #     'please install mmdeploy from ' \
-    #     'https://github.com/HuangJunJie2017/mmdeploy.git'
+    load_tensorrt_plugin()
+    assert 'bev_pool_v2' in get_plugin_names(), \
+        'bev_pool_v2 is not in the plugin list of tensorrt, ' \
+        'please install mmdeploy from ' \
+        'https://github.com/HuangJunJie2017/mmdeploy.git'
 
     if args.int8:
         assert args.fp16
@@ -361,6 +366,7 @@ def main():
                 input = [img] + [d.cuda() for d in data['img_inputs'][0][1:]]
                 bev_feat_1 = model.img_view_transformer(input)[0]
             model.img_view_transformer.accelerate = True
+
             with torch.no_grad():
                 img, _ = model.image_encoder(data['img_inputs'][0][0].cuda())
                 input = [img] + [d.cuda() for d in data['img_inputs'][0][1:]]
@@ -368,15 +374,19 @@ def main():
             assert torch.all(bev_feat_1 == bev_feat)
             continue
         img = data['img_inputs'][0][0][0].cuda()
+        # metas = model.img_view_transformer.get_fastray_input(input)
+        # _, coors_img, coors_depth = metas
         _, coors_img, coors_depth = model.img_view_transformer.get_fastray_input(input)
         coors_img, coors_depth = coors_img[0], coors_depth[0]
+        metas = coors_img, coors_depth
+        # print('->metas:',metas);exit()
         with torch.no_grad():
             torch.onnx.export(
                 model,
                 (img.float().contiguous(), coors_img.contiguous(), coors_depth.contiguous()),
                 args.work_dir + model_prefix + '.onnx',
                 opset_version=11,
-                input_names=['img', 'coors_img', 'coors_depth'],
+                input_names=['img','coors_img', 'coors_depth'],
                 output_names=[f'output_{j}' for j in
                             range(6 * len(model.pts_bbox_head.task_heads))])
         break
@@ -393,51 +403,57 @@ def main():
     onnx.save(onnx_simp, args.work_dir + model_prefix + '.onnx')
     print(f"🚀 The export is completed. ONNX save as {args.work_dir + model_prefix + '.onnx'} 🤗, Have a nice day~")
 
-    # # convert to tensorrt
-    # input_shapes = dict(
-    #     img=dict(
-    #         min_shape=img.shape, opt_shape=img.shape, max_shape=img.shape),
-    #     coors=dict(
-    #         min_shape=coors.shape,
-    #         opt_shape=coors.shape,
-    #         max_shape=coors.shape))
-    # deploy_cfg = dict(
-    #     backend_config=dict(
-    #         type='tensorrt',
-    #         common_config=dict(
-    #             fp16_mode=args.fp16,
-    #             max_workspace_size=1073741824,
-    #             int8_mode=args.int8),
-    #         model_inputs=[dict(input_shapes=input_shapes)]),
-    #     codebase_config=dict(
-    #         type='mmdet3d', task='VoxelDetection', model_type='end2end'))
+    # convert to tensorrt
+    input_shapes = dict(
+        img=dict(
+            min_shape=img.shape, opt_shape=img.shape, max_shape=img.shape),
+        coors_img=dict(
+            min_shape=coors_img.shape,
+            opt_shape=coors_img.shape,
+            max_shape=coors_img.shape),
+        coors_depth=dict(
+            min_shape=coors_depth.shape,
+            opt_shape=coors_depth.shape, 
+            max_shape=coors_depth.shape
+        )    
+            )
+    deploy_cfg = dict(
+        backend_config=dict(
+            type='tensorrt',
+            common_config=dict(
+                fp16_mode=args.fp16,
+                max_workspace_size=1073741824,
+                int8_mode=args.int8),
+            model_inputs=[dict(input_shapes=input_shapes)]),
+        codebase_config=dict(
+            type='mmdet3d', task='VoxelDetection', model_type='end2end'))
 
-    # if args.int8:
-    #     calib_filename = 'calib_data.h5'
-    #     calib_path = os.path.join(args.work_dir, calib_filename)
-    #     create_calib_input_data(
-    #         calib_path,
-    #         deploy_cfg,
-    #         args.config,
-    #         args.checkpoint,
-    #         dataset_cfg=None,
-    #         dataset_type='val',
-    #         device='cuda:0',
-    #         metas=metas)
+    if args.int8:
+        calib_filename = 'calib_data.h5'
+        calib_path = os.path.join(args.work_dir, calib_filename)
+        create_calib_input_data(
+            calib_path,
+            deploy_cfg,
+            args.config,
+            args.checkpoint,
+            dataset_cfg=None,
+            dataset_type='val',
+            device='cuda:0',
+            metas=metas)
 
-    # from_onnx(
-    #     args.work_dir + model_prefix + '.onnx',
-    #     args.work_dir + model_prefix,
-    #     fp16_mode=args.fp16,
-    #     int8_mode=args.int8,
-    #     int8_param=dict(
-    #         calib_file=os.path.join(args.work_dir, 'calib_data.h5'),
-    #         model_type='end2end'),
-    #     max_workspace_size=1 << 30,
-    #     input_shapes=input_shapes)
+    from_onnx(
+        args.work_dir + model_prefix + '.onnx',
+        args.work_dir + model_prefix,
+        fp16_mode=args.fp16,
+        int8_mode=args.int8,
+        int8_param=dict(
+            calib_file=os.path.join(args.work_dir, 'calib_data.h5'),
+            model_type='end2end'),
+        max_workspace_size=1 << 30,
+        input_shapes=input_shapes)
 
-    # if args.int8:
-    #     os.remove(calib_path)
+    if args.int8:
+        os.remove(calib_path)
 
 
 if __name__ == '__main__':

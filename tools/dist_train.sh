@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+# # with acceleration
+# python tools/analysis_tools/benchmark.py configs/bevdet/bevdet-sttiny-accelerated.py $checkpoint
+# # without acceleration
+# python tools/analysis_tools/benchmark.py configs/bevdet/bevdet-sttiny.py $checkpoint
+# ./tools/dist_test.sh configs/fastbev/paper/fastbev-r50-cbgs.py work_dirs/fastbev-r50-cbgs/epoch_20_ema.pth 1 --eval mAP 2>&1 | tee work_dirs/fastbev-r50-cbgs/epoch_20_ema.pth.log
+# python tools/convert_fastbev_to_TRT.py $config $checkpoint $work_dir --fuse-conv-bn --fp16 --int8
+
 CONFIG=$1
 GPUS=$2
 NNODES=${NNODES:-1}

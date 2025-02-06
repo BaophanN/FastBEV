@@ -1163,7 +1163,16 @@ class LoadAnnotations(object):
 
     def __call__(self, results):
         gt_boxes, gt_labels = results['ann_infos']
-        gt_boxes, gt_labels = torch.Tensor(gt_boxes), torch.tensor(gt_labels)
+
+        gt_boxes = np.array(gt_boxes) 
+        gt_labels = np.array(gt_labels) 
+        # New implementation 
+        gt_boxes = torch.from_numpy(gt_boxes).float() 
+        gt_labels = torch.from_numpy(gt_labels) 
+
+
+        # Original implementation 
+        # gt_boxes, gt_labels = torch.Tensor(gt_boxes), torch.tensor(gt_labels)
         if len(gt_boxes) == 0:
             gt_boxes = torch.zeros(0, 9)
         results['gt_bboxes_3d'] = \

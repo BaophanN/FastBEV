@@ -149,7 +149,7 @@ def main():
                            [f'output_{i}' for i in
                             range(6 * len(model.pts_bbox_head.task_heads))])
 
-    num_warmup = 50
+    num_warmup = 10
     pure_inf_time = 0
 
     init_ = True
@@ -157,6 +157,7 @@ def main():
     # benchmark with several samples and take the average
     results = list()
     for i, data in enumerate(data_loader):
+
         if init_:
             inputs = [t.cuda() for t in data['img_inputs'][0]]
             metas_ = model.get_bev_pool_input(inputs)
@@ -188,10 +189,10 @@ def main():
                 results.append(bbox_results[0])
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - start_time
-
         if i >= num_warmup:
+            
             pure_inf_time += elapsed
-            if (i + 1) % 50 == 0:
+            if (i + 1) % 10 == 0:
                 fps = (i + 1 - num_warmup) / pure_inf_time
                 print(f'Done image [{i + 1:<3}/ {args.samples}], '
                       f'fps: {fps:.2f} img / s')

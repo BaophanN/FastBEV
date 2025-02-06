@@ -18,7 +18,7 @@ def parse_args():
     parser.add_argument('checkpoint', help='checkpoint file')
     parser.add_argument('--samples', default=500, help='samples to benchmark')
     parser.add_argument(
-        '--log-interval', default=50, help='interval of logging')
+        '--log-interval', default=10, help='interval of logging')
     parser.add_argument(
         '--fuse-conv-bn',
         action='store_true',

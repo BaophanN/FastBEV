@@ -65,6 +65,7 @@ class FastrayTransformer(BaseModule):
         self.fuse = self.fuse_type = None
         if fuse is not None:
             if fuse['type'] == 's2c':
+                # fuse with a 2D convolutional layer 
                 self.fuse = nn.Conv2d(self.out_channels*self.grid_size[2].int(), self.out_channels, kernel_size=1)
             self.fuse_type = fuse['type']
         self.stride = stride
@@ -126,6 +127,7 @@ class FastrayTransformer(BaseModule):
         batch_pre_img_coors_list = []
         batch_pre_depth_coors_list = []
         for b in range(batch_size):
+            # Augmentation on camera parameters 
             cur_lidar_aug_matrix = lidar_aug_matrix[b]
             cur_camego2img = camego2imgs[b]
             curr_post_rots = post_rots[b]

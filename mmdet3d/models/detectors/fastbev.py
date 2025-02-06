@@ -510,16 +510,22 @@ class FastBEVTRT(FastBEV):
         coors_img,
         coors_depth=None
     ):
+        # Extract 2D features (ResNet + FPN )
         img = self.img_backbone(img)
         img = self.img_neck(img)
+        # Predict Depth map from 2D features 
         img = self.img_view_transformer.depth_net(img)
-
+        # Feature map: B, C, H, W 
         channel = img.shape[1]
+        # (B, C, H, W) -> (B, HxW, C)
         img = img.permute(0, 2, 3, 1).reshape(-1, channel)
+        # Create the voxel grid 
         img_0 = torch.zeros([1, img.shape[1]]).to(img.device)
+        # WTF is img_rest  
         img_rest = img[1:]
+        # WTF is this?
         img = torch.cat([img_0, img_rest])
-
+        # Concat the depth map with the 2D Feature map, rememeber the outer product
         if channel != self.img_view_transformer.out_channels:
             depth = img[:, :self.img_view_transformer.D].reshape(-1)
             x = img[:, self.img_view_transformer.D:(self.img_view_transformer.D + self.img_view_transformer.out_channels)]
@@ -528,15 +534,20 @@ class FastBEVTRT(FastBEV):
             x = x * depth
         else:
             x = img[coors_img]
+        # Actually here is the grid creation 
         x = x.view(1, *self.img_view_transformer.grid_size.int().tolist(), self.img_view_transformer.out_channels)
+        
         N, X, Y, Z, C = x.shape
-
+        # Why do you have to transpose here? 
         if self.img_view_transformer.is_transpose:
             permute = [0, 3, 2, 1]
         else:
             permute = [0, 3, 1, 2]
         if self.img_view_transformer.fuse_type is not None:
+            # Remember the spatial-to-channel in the paper
+            # this is the alternative to voxel pooling 
             if self.img_view_transformer.fuse_type == 's2c':
+                
                 x = x.reshape(N, X, Y, Z*C).permute(permute)
                 x = self.img_view_transformer.fuse(x)
             elif self.img_view_transformer.fuse_type == 'sum':

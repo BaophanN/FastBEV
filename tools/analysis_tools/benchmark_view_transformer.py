@@ -79,10 +79,15 @@ def main():
             img_feat, _ = \
                 model.module.image_encoder(data['img_inputs'][0][0].cuda())
             B, N, C, H, W = img_feat.shape
+            # aha, depth net again
             x = depth_net(img_feat.reshape(B * N, C, H, W))
+            # what is this? 
             depth_digit = x[:, :D, ...]
+            # what the heck is tran_feat 
             tran_feat = x[:, D:D + out_channels, ...]
+            # put through softmax to turn into probability
             depth = depth_digit.softmax(dim=1)
+        
         input = [img_feat] + [d.cuda() for d in data['img_inputs'][0][1:]]
 
         if i == 0:

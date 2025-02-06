@@ -107,6 +107,11 @@ def create_calib_input_data_impl(calib_file: str,
                                  dataloader: DataLoader,
                                  model_partition: bool = False,
                                  metas: list = []) -> None:
+    """
+    metas: the contiguous input_keys tensors 
+    
+    """
+
     with h5py.File(calib_file, mode='w') as file:
         calib_data_group = file.create_group('calib_data')
         assert not model_partition
@@ -120,6 +125,8 @@ def create_calib_input_data_impl(calib_file: str,
         input_groups = []
         for input_key in input_keys:
             input_groups.append(input_data_group.create_group(input_key))
+        # print('->metas[0]*********', type(metas[0]))
+        # print('->metas',metas[0], type(metas[0])); exit()
         metas = [
             metas[i].int().detach().cpu().numpy() for i in range(len(metas))
         ]
@@ -355,6 +362,8 @@ def main():
     for i, data in enumerate(data_loader):
         inputs = [t.cuda() for t in data['img_inputs'][0]]
         metas = model.get_bev_pool_input(inputs)
+        # print('->metas:',metas)
+        # exit()
         img = inputs[0].squeeze(0)
         with torch.no_grad():
             torch.onnx.export(
@@ -370,7 +379,7 @@ def main():
                 ],
                 output_names=[f'output_{j}' for j in
                               range(6 * len(model.pts_bbox_head.task_heads))])
-        break
+        # break
     # check onnx model
     onnx_model = onnx.load(args.work_dir + model_prefix + '.onnx')
     try:
