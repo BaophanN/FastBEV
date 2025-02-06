@@ -2,6 +2,8 @@
 Currently, playing with mini-nuscenes since the full dataset is too heavy. 
 The codebase is similar to that of LaneSegNet. Needs to install spconv-cu111. 
 
+Another option is to use the bevdet image from dockerhub. 
+
 
 ## Main Results
 
