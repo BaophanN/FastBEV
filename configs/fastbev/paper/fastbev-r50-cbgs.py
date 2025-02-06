@@ -246,7 +246,7 @@ test_data_config = dict(
     ann_file=data_root + 'bevdetv3-nuscenes_mini_infos_val.pkl')
 
 data = dict(
-    samples_per_gpu=2,
+    samples_per_gpu=8,
     workers_per_gpu=4,
     train=dict(
         type='CBGSDataset',
@@ -276,7 +276,7 @@ lr_config = dict(
     warmup_iters=200,
     warmup_ratio=0.001,
     step=[20,])
-runner = dict(type='EpochBasedRunner', max_epochs=1)
+runner = dict(type='EpochBasedRunner', max_epochs=20)
 
 custom_hooks = [
     dict(
