@@ -124,7 +124,10 @@ def parse_args():
 
 
 color_map = {0: (255, 255, 0), 1: (0, 255, 255)}
-
+"""
+0: (255, 255, 0) is yellow (used for ground truth boxes).
+1: (0, 255, 255) is cyan (used for predicted boxes).
+"""
 
 def main():
     args = parse_args()

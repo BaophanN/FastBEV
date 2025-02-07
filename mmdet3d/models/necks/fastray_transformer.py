@@ -283,6 +283,7 @@ class FastrayTransformer(BaseModule):
         else:
             depth = x[..., :self.D].softmax(dim=-1)
         x = x[..., self.D:(self.D + self.out_channels)]
+        # These voxel_coors, img_coors, depth_coors are computed in advance
         pre_voxel_coors_list, pre_img_coors_list, pre_depth_coors_list = self.get_fastray_input(input)
         # What's the matter here? 
         if self.accelerate:
@@ -291,10 +292,12 @@ class FastrayTransformer(BaseModule):
             depth = depth.reshape(-1)
             x = x[pre_img_coors_list[0]]
             depth = depth[pre_depth_coors_list[0]].unsqueeze(1)
+            # Outer product computed here 
             x = x * depth
             x = x.view(B, *self.grid_size.int().tolist(), self.out_channels)
         else:
             voxel_feature = torch.zeros(
+                # (B, X*Y*Z, C)
                 (B, int(self.grid_size[0]) * int(self.grid_size[1]) * int(self.grid_size[2]), self.out_channels), device=x.device
             ).type_as(x)
             for i in range(B):
